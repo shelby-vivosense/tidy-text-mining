@@ -1,2 +1,1 @@
-# tidy-text-mining
-Learning text mining in R
+This repository documents my attempt to learn text mining in R with the [`tidytext` package](https://cran.r-project.org/web/packages/tidytext/vignettes/tidytext.html) and the accompanying [Text Mining in R](https://www.tidytextmining.com/index.html) book. 
