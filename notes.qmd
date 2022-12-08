@@ -1,0 +1,222 @@
+---
+title: "notes"
+format: html
+editor: source
+---
+
+## Chapter 1: The tidy text format
+
+The example below demonstrates how to converting text to the tidy text format. As an example, we use text from Jane Austen's 6 novels from the `janeaustenr` package:
+
+```{r}
+
+library(janeaustenr)
+library(dplyr)
+library(tidyr)
+library(stringr)
+
+# return tidy dataframe of book text
+# with text for each chapter and line number
+original_books <- austen_books() %>%
+  group_by(book) %>%
+  mutate(linenumber = row_number(),
+         chapter = cumsum(str_detect(
+           text,
+           regex('^chapter [\\divxlc]',
+                 ignore_case = TRUE)))) %>%
+  ungroup()
+
+head(original_books)
+
+```
+
+## Convert to tidy text format
+
+We convert this to a tidy dataset, e.g. one token per row, using the `unnest_tidy()` function. The first argument specifies the new column to create, and the second argument specifies the input column. By default, the function tokenizes for words, but tokenization by characters, sentences, and n-grams is also possible:
+
+```{r}
+
+library(tidytext)
+
+# convert dataframe to tidy (one token per line)
+tidy_books <- original_books %>%
+  unnest_tokens(word, text)
+
+head(tidy_books)
+
+```
+
+## Remove stop words
+
+To remove stopwords, we use an `anti_join()` with the `stop_words` dataframe, stored by the `tidytext` package:
+
+```{r}
+
+# remove stop words
+tidy_books <- tidy_books %>%
+  anti_join(stop_words,
+            by = 'word')
+
+```
+
+Notice that `stop_words` has stop words from three lexicons; we can use them all together or filter to use only one set:
+
+```{r}
+
+stop_words$lexicon %>% unique()
+
+```
+
+## Count most common words
+
+With the data in tidy format, we can find the most common words in the dataset:
+
+```{r}
+
+tidy_books %>%
+  count(word, sort = TRUE)
+
+```
+
+## Visualize most common words
+
+We can also visualize the most common words with `ggplot2`:
+
+```{r}
+
+library(ggplot2)
+
+tidy_books %>%
+  count(word, sort = TRUE) %>%
+  filter(n > 600) %>%
+  mutate(word = reorder(word, n)) %>%
+  ggplot(aes(x = n, 
+             y = word)) +
+  geom_col() +
+  labs(x = 'Count', 
+       y = '',
+       subtitle = "The most common words in Jane Austen's novels") +
+  theme_minimal()
+
+```
+
+## Comparing word frequencies across texts
+
+For this example, we will compare the frequency of words in Jane Austen's novels with frequencies in two other texts, novels by H.G. Wells, obtained via the `gutenbergr` package:
+
+```{r}
+
+library(gutenbergr)
+
+# download text from novels of HG Wells
+hgwells <- gutenberg_download(c(35, 36, 5230, 159))
+
+# convert to tidy format and remove stop words
+tidy_hgwells <- hgwells %>%
+  unnest_tokens(word, text) %>%
+  anti_join(stop_words)
+
+# show most common words 
+tidy_hgwells %>%
+  count(word, sort = TRUE)
+
+```
+
+We'll also gather words from novels of the Brontë sisters using `gutenbergr`:
+
+```{r}
+
+# download text from novels of Bronte sisters
+bronte <- gutenberg_download(c(1260, 678, 969, 9182, 767))
+
+# convert to tidy format and remove stop words
+tidy_bronte <- bronte %>%
+  unnest_tokens(word, text) %>%
+  anti_join(stop_words)
+
+# show most common words 
+tidy_bronte %>%
+  count(word, sort = TRUE)
+
+```
+
+We calculate the frequency for each word for each set of works, and then compare the frequencies, by binding the dataframes together:
+
+```{r}
+
+frequency <- bind_rows(
+  # bind dataframes, adding author column to each
+  tidy_bronte %>%
+    mutate(author = 'Brontë Sisters'),
+  tidy_hgwells %>%
+    mutate(author = 'H.G. Wells'),
+  tidy_books %>%
+    mutate(author = 'Jane Austen')
+) %>%
+  # this step is bcause UTF-8 encoded texts from Gutenberg
+  # have some words with underscores around them
+  mutate(word = str_extract(word, "[a-z']+")) %>%
+  # tally words for each author
+  count(word, author) %>%
+  # group by author
+  group_by(author) %>%
+  # compute frequency of each word
+  mutate(proportion = n / sum(n)) %>%
+  select(-n)
+
+```
+
+## Visualize comparison of word frequencies
+
+We can visualize Jane Austen novels with words in each of the other groups of novels:
+
+```{r}
+
+library(scales)
+
+# reshape data to reflect the comparisons we want to plot
+# (keeping austen proportions in one column)
+frequency_reshaped <- frequency %>%
+  pivot_wider(names_from = author,
+              values_from = proportion) %>%
+  pivot_longer(`Brontë Sisters`:`H.G. Wells`,
+               names_to = 'author', 
+               values_to = 'proportion')
+
+ggplot(frequency_reshaped,
+       aes(x = proportion,
+             y = `Jane Austen`,
+             colour = abs(`Jane Austen` - proportion))) +
+  geom_abline(colour = 'gray40', lty = 2) +
+  geom_jitter(alpha = 0.1,
+              size = 2.5,
+              width = 0.3, 
+              height = 0.3) +
+  geom_text(aes(label = word),
+            check_overlap = TRUE, 
+            vjust = 1.5) +
+  scale_x_log10(labels = percent_format()) +
+  scale_y_log10(labels = percent_format()) +
+  scale_colour_gradient(limits = c(0, 0.001),
+                        low = 'darkslategray4',
+                        high = 'gray75') +
+  facet_wrap(~author, ncol = 2) +
+  theme(legend.position = 'none') +
+  labs(x = '',
+       y = 'Jane Austen')
+
+```
+
+## Quantifying similarities in word frequencies
+
+```{r}
+
+cor.test(data = frequency_reshaped[frequency_reshaped$author == "Brontë Sisters",],
+         ~ proportion + `Jane Austen`)
+
+cor.test(data = frequency_reshaped[frequency_reshaped$author == "H.G. Wells",],
+         ~ proportion + `Jane Austen`)
+
+```
+
+The results indicate that word frequencies are more correlated between the Austen and Brontë novels than between the Austen and H.G. Wells novels.
