@@ -4,7 +4,7 @@ format: html
 editor: source
 ---
 
-## Chapter 1: The tidy text format
+# The tidy text format
 
 The example below demonstrates how to converting text to the tidy text format. As an example, we use text from Jane Austen's 6 novels from the `janeaustenr` package:
 
@@ -220,3 +220,154 @@ cor.test(data = frequency_reshaped[frequency_reshaped$author == "H.G. Wells",],
 ```
 
 The results indicate that word frequencies are more correlated between the Austen and Brontë novels than between the Austen and H.G. Wells novels.
+
+# Analyzing word and document frequency: tf-idf
+
+The previous approach to tallying word (term) frequencies, involving anti-joining with a list of stopwords. was not terribly sophisticated. Another approach is to look at a term's inverse document frequency (idf), which decreases the weight for commonly used words and increases the weight for words not used much in a collection of documents. Together with term frequency (tf), the **tf-idf (which is the two quantities multiplied together) reflects the frequency of a term, adjusted for how rarely it is used**:
+
+$idf(term) = \ln{\frac{n_{documents}}{n_{documents\,containing\,term}}}$
+
+## Zipf's law
+
+We start by examining term frequency and td-idf within Jane Austen's novels.
+
+```{r}
+
+book_words <- austen_books() %>%
+  unnest_tokens(word, text) %>%
+  count(book, word, sort = TRUE)
+
+total_words <- book_words %>%
+  group_by(book) %>%
+  summarize(total = sum(n))
+
+book_words <- left_join(
+  book_words, total_words
+) %>%
+  rowwise() %>%
+  mutate(term_frequency = n/total)
+
+ggplot(book_words, 
+       aes(x = term_frequency, fill = book)) +
+  geom_histogram(show.legend = FALSE) +
+  xlim(NA, 0.0009) +
+  facet_wrap(~book, ncol = 2, scales = 'free_y')
+
+```
+
+The distributions in the figure above demonstrate **Zipf's law**, which states that the frequency a word appears is inversely proportional to its rank (rank of the word within the frequency tables created above).
+
+## Calculate tf-idf
+
+Calculating tf-idf attempts to find words that are important (common), but not too common, in a text. The `bind_tf_idf()` function creates columns `tf`, `idf`, and `tf_idf`. We then want to examine words with high tf-idf:
+
+```{r}
+
+book_tf_idf <- book_words %>%
+  bind_tf_idf(term = word, document = book, n = n)
+
+book_tf_idf %>%
+  select(-total) %>%
+  arrange(desc(tf_idf))
+
+```
+
+## Visualize tf-idf
+
+```{r}
+
+library(forcats)
+
+book_tf_idf %>%
+  group_by(book) %>%
+  slice_max(tf_idf, n = 10) %>%
+  ungroup() %>%
+  ggplot(aes(x = tf_idf, 
+             y = fct_reorder(word, tf_idf),
+             fill = book)) +
+  geom_col(show.legend = FALSE) +
+  labs(x = 'tf-idf', y = NULL) +
+  facet_wrap(~book, ncol = 2, scales = 'free')
+
+```
+
+As another example, we will calculate and visualize tf-idf for a set of physics texts from Project Gutenberg:
+
+```{r}
+
+library(gutenbergr)
+
+# download the texts
+physics <- gutenberg_download(
+  c(37729, 14725, 13476, 30155),
+  meta_fields = 'author'
+)
+
+# count n for each word in each text
+physics_words <- physics %>%
+  unnest_tokens(word, text) %>%
+  count(author, word, sort = TRUE)
+
+# calculate tf-idf
+physics_tfidf <- physics_words %>%
+  bind_tf_idf(word, author, n) %>%
+  mutate(author = factor(author, levels = c('Galilei, Galileo',
+                                            'Huygens, Christiaan',
+                                            'Tesla, Nikola',
+                                            'Einstein, Albert')))
+
+# show words with highest tf-idf
+physics_tfidf %>%
+  group_by(author) %>%
+  slice_max(tf_idf, n = 2)
+
+# visualize tf-idf
+physics_tfidf %>%
+  group_by(author) %>%
+  slice_max(tf_idf, n = 10) %>%
+  ungroup() %>%
+  mutate(word = reorder(word, tf_idf)) %>%
+  ggplot(aes(x = tf_idf,
+             y = word,
+             fill = author)) +
+  geom_col(show.legend = FALSE) +
+  labs(x = 'tf-idf', y = NULL) +
+  facet_wrap(~author, ncol = 2, scales = 'free')
+
+```
+
+We can remove some of the less meaningful words:
+
+```{r}
+
+custom_stopwords <- tibble(
+  word = c('eq', 'co', 'rc', 'ab', 'ac', 'ak', 
+           'bn', 'fig', 'file', 'cg', 'cb', 'cm',
+           '_k', '_k_', '_x')
+)
+
+# remove custom stop words
+physics_words <- anti_join(
+  physics_words, custom_stopwords,
+  by = 'word'
+)
+
+# recalculate tf-idf and visualize
+physics_words %>%
+  bind_tf_idf(word, author, n) %>%
+  mutate(word = str_remove_all(word, '_')) %>%
+  group_by(author) %>%
+  slice_max(tf_idf, n = 10) %>%
+  mutate(word = fct_reorder(word, tf_idf)) %>%
+  mutate(author = factor(author, levels = c('Galilei, Galileo',
+                                            'Huygens, Christiaan',
+                                            'Tesla, Nikola',
+                                            'Einstein, Albert'))) %>%
+  ggplot(aes(x = tf_idf,
+             y = word,
+             fill = author)) +
+  geom_col(show.legend = FALSE) +
+  labs(x = 'tf-idf', y = NULL) +
+  facet_wrap(~author, ncol = 2, scales = 'free')  
+
+```
